@@ -97,9 +97,18 @@ const (
 var ErrIdentityRejected = errors.New("agent identity was rejected by the control plane")
 
 func NewClient(config ClientConfig, executor *Executor) (*Client, error) {
+	if err := executor.LoadCoreMigrationState(); err != nil {
+		return nil, fmt.Errorf("load existing core migration state: %w", err)
+	}
 	if err := executor.Validate(); err != nil {
 		return nil, err
 	}
+	reconcileContext, reconcileCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	if err := executor.ReconcileExistingCoreServices(reconcileContext); err != nil {
+		reconcileCancel()
+		return nil, fmt.Errorf("reconcile existing core migration: %w", err)
+	}
+	reconcileCancel()
 	parsed, err := url.Parse(config.ServerURL)
 	if err != nil || parsed.Host == "" {
 		return nil, errors.New("QCH_SERVER_URL must be a valid absolute URL")
@@ -157,7 +166,7 @@ func NewClient(config ClientConfig, executor *Executor) (*Client, error) {
 		websocketURL: websocketScheme + "://" + parsed.Host + "/agent/v1/connect",
 		metrics:      metricsCollector,
 		traffic:      NewTrafficManager(config.StatePath),
-		logs:         NewCoreLogCollector(),
+		logs:         NewCoreLogCollector(executor.Specs, executor.ExistingSpecs),
 		http: &http.Client{
 			Transport: transport,
 			CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
@@ -998,19 +1007,36 @@ func explainTLSError(err error) error {
 
 func validateOwner(info os.FileInfo, description string) error {
 	expected := os.Geteuid()
-	if expected < 0 || info.Sys() == nil {
+	uid, known := fileOwnerUID(info)
+	if expected < 0 || !known {
 		return nil
+	}
+	if int(uid) != expected {
+		return fmt.Errorf("%s is owned by uid %d, expected uid %d", description, uid, expected)
+	}
+	return nil
+}
+
+func validateOwnerOrRoot(info os.FileInfo, description string) error {
+	expected := os.Geteuid()
+	uid, known := fileOwnerUID(info)
+	if expected < 0 || !known || uid == 0 || int(uid) == expected {
+		return nil
+	}
+	return fmt.Errorf("%s is owned by uid %d, expected root or uid %d", description, uid, expected)
+}
+
+func fileOwnerUID(info os.FileInfo) (uint64, bool) {
+	if info == nil || info.Sys() == nil {
+		return 0, false
 	}
 	value := reflect.Indirect(reflect.ValueOf(info.Sys()))
 	if !value.IsValid() {
-		return nil
+		return 0, false
 	}
 	uid := value.FieldByName("Uid")
 	if !uid.IsValid() || !uid.CanUint() {
-		return nil
+		return 0, false
 	}
-	if int(uid.Uint()) != expected {
-		return fmt.Errorf("%s is owned by uid %d, expected uid %d", description, uid.Uint(), expected)
-	}
-	return nil
+	return uid.Uint(), true
 }

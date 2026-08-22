@@ -49,6 +49,7 @@ download() {
 echo '== 1/6 下载安装资源 =='
 for asset in \
   deploy/bootstrap-core-services.sh \
+  deploy/existing-core-mapping.sh \
   deploy/systemd/qagent.service \
   deploy/systemd/qagent-core-journal.conf \
   deploy/systemd/qagent-mihomo.service \
@@ -62,13 +63,30 @@ for asset in \
 do
   download "/install-assets/$asset" "$repository_dir/$asset"
 done
+. "$repository_dir/deploy/existing-core-mapping.sh"
 
 echo "== 2/6 下载 agent 二进制（控制面 GET /api/v1/agent-binary）=="
 download /api/v1/agent-binary "$work_dir/qagent"
 [ -s "$work_dir/qagent" ] || { printf '%s\n' 'downloaded agent binary is empty' >&2; exit 1; }
+chmod 0755 "$work_dir/qagent"
 
-echo '== 3/6 引导核心服务（mihomo/xray/sing-box/ss-rust 单元与最小配置）=='
-bash "$repository_dir/deploy/bootstrap-core-services.sh"
+echo '== 3/6 检测现有核心并引导其余服务 =='
+run_discovery() {
+  label=$1
+  shift
+  if "$@"; then
+    return 0
+  else
+    result=$?
+  fi
+  [ "$result" -eq 1 ] || {
+    printf '%s\n' "unsafe $label service state; installation stopped without changing services" >&2
+    exit "$result"
+  }
+}
+run_discovery Xray discover_existing_xray
+run_discovery sing-box discover_existing_singbox
+QCH_SKIP_CORE_SERVICES="$mapped_engines" bash "$repository_dir/deploy/bootstrap-core-services.sh"
 
 echo '== 4/6 写入 agent 环境文件 =='
 mkdir -p /usr/local/lib/qagent
@@ -87,6 +105,20 @@ umask 077
   printf '%s\n' 'QCH_AGENT_LABELS=region=cn-east'
   printf '%s\n' 'QCH_AGENT_STATE=/var/lib/qcontrolhub/agent-state.json'
   printf '%s\n' 'QCH_AGENT_ENGINES=mihomo,xray,sing-box,ss-rust'
+  if [ -n "$mapped_xray_config" ]; then
+    printf '%s\n' \
+      "QCH_EXISTING_XRAY_BINARY=$mapped_xray_binary" \
+      "QCH_EXISTING_XRAY_CONFIG=$mapped_xray_config" \
+      "QCH_EXISTING_XRAY_SERVICE=$mapped_xray_service"
+  fi
+  if [ -n "$mapped_singbox_config" ]; then
+    printf '%s\n' \
+      "QCH_EXISTING_SING_BOX_BINARY=$mapped_singbox_binary" \
+      "QCH_EXISTING_SING_BOX_CONFIG=$mapped_singbox_config" \
+      "QCH_EXISTING_SING_BOX_CONFIG_DIRECTORY=$mapped_singbox_config_directory" \
+      "QCH_EXISTING_SING_BOX_SERVICE_BINARY=$mapped_singbox_service_binary" \
+      "QCH_EXISTING_SING_BOX_SERVICE=$mapped_singbox_service"
+  fi
 } > /etc/qcontrolhub/agent.env
 chmod 0600 /etc/qcontrolhub/agent.env
 

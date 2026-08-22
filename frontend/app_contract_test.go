@@ -462,6 +462,40 @@ func TestSPAModulesArePublished(t *testing.T) {
 	}
 }
 
+func TestManualConfigRequiresExplicitImportOfNodeSnapshot(t *testing.T) {
+	configs, err := os.ReadFile("modules/configs.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := string(configs)
+	for _, required := range []string{
+		`data-live-intent="import">手动导入并迁移`,
+		`迁移任一步失败都会自动恢复原服务`,
+		`action: "import-existing"`,
+		`existing_config_unsupported_reason`,
+		`检测到现有服务，但不可自动迁移`,
+		`!unsupportedReason`,
+		`esc(unsupportedReason)`,
+	} {
+		if !strings.Contains(content, required) {
+			t.Errorf("manual configuration flow is missing %q", required)
+		}
+	}
+	agents, err := os.ReadFile("modules/agents.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`data-existing-pending`, `data-existing-unsupported`, `data-manual-import`,
+		`现有服务待迁移`, `检测到但不可迁移`, `查看不可迁移原因`,
+		`existing_config_unsupported_reason`, `esc(existingUnsupportedReason)`,
+	} {
+		if !strings.Contains(string(agents), required) {
+			t.Errorf("node service controls do not represent pending migration state %q", required)
+		}
+	}
+}
+
 func TestTaskPollingKeepsTheScrollContainerStable(t *testing.T) {
 	tasks, err := os.ReadFile("modules/tasks.js")
 	if err != nil {

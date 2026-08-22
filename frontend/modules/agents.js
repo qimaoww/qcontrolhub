@@ -269,15 +269,34 @@ async function nodeSettings(presetMode = false, { overview: preloadedOverview } 
               ? `${access.address}:${port}`
               : access?.address || "";
           const installed = Boolean(runtime.installed);
-          const serviceState = installed
+          const existingPending = Boolean(
+            runtime.existing_config_available,
+          );
+          const existingUnsupportedReason = String(
+            runtime.existing_config_unsupported_reason || "",
+          );
+          const existingBlocked = Boolean(existingUnsupportedReason);
+          const serviceState = existingPending
+            ? "现有服务待迁移"
+            : existingBlocked
+            ? "检测到但不可迁移"
+            : installed
             ? serviceStatusName(runtime.service_status)
             : "未安装";
-          const serviceTone = installed
+          const serviceTone = existingPending
+            ? "warn"
+            : existingBlocked
+            ? "warn"
+            : installed
             ? statusTone(runtime.service_status)
             : "muted";
           let primaryActions = "";
           if (presetMode && can("agent-config.read")) {
-            primaryActions = drift
+            primaryActions = existingBlocked
+              ? `<button class="button primary" type="button" data-manual-import data-manual-agent="${esc(agent.id)}" data-manual-engine="${esc(engine)}">查看不可迁移原因</button>`
+              : existingPending
+              ? `<button class="button primary" type="button" data-manual-import data-manual-agent="${esc(agent.id)}" data-manual-engine="${esc(engine)}">前往手动导入</button>`
+              : drift
               ? `<button class="button service-config" type="button" data-config="${esc(agent.id)}" data-engine="${esc(engine)}">查看配置</button>${can("tasks.execute") ? `<button class="button primary" type="button" data-deploy="${esc(agent.id)}" data-engine="${esc(engine)}" data-config-id="${esc(saved.id)}">部署 v${saved.version}</button>` : ""}`
               : `<button class="button primary service-config" type="button" data-config="${esc(agent.id)}" data-engine="${esc(engine)}">配置 <span>→</span></button>`;
           }
@@ -286,26 +305,26 @@ async function nodeSettings(presetMode = false, { overview: preloadedOverview } 
               ? ["status", "start", "restart", "stop"]
                   .map(
                     (action) =>
-                      `<button class="core-action ${action === "stop" ? "danger" : ""}" type="button" data-task-agent="${esc(agent.id)}" data-task-engine="${esc(engine)}" data-task-action="${action}" data-service-action="${action}" aria-label="${esc(`${actionName(action)} ${engineName(engine)}`)}" title="${esc(actionName(action))}" ${serviceActionDisabled(action, agent.status === "online", installed, runtime.service_status) ? "disabled" : ""}>${serviceActionIcons[action]}</button>`,
+                      `<button class="core-action ${action === "stop" ? "danger" : ""}" type="button" data-task-agent="${esc(agent.id)}" data-task-engine="${esc(engine)}" data-task-action="${action}" data-service-action="${action}" aria-label="${esc(`${actionName(action)} ${engineName(engine)}`)}" title="${esc(actionName(action))}" ${existingPending || existingBlocked || serviceActionDisabled(action, agent.status === "online", installed, runtime.service_status) ? "disabled" : ""}>${serviceActionIcons[action]}</button>`,
                   )
                   .join("")
               : "";
-            return `<article class="service-card core-runtime-row service-${esc(engine)}" data-core-installed="${installed ? 1 : 0}">
+            return `<article class="service-card core-runtime-row service-${esc(engine)}" data-core-installed="${installed ? 1 : 0}" data-existing-pending="${existingPending ? 1 : 0}" data-existing-unsupported="${esc(existingUnsupportedReason)}">
               <div class="core-runtime-summary">
                 <div class="core-runtime-name"><span class="engine-badge ${esc(engine)}">${esc(engineName(engine))}</span><span class="engine-state ${serviceTone}"><i></i><b data-core-service="${esc(engine)}">${esc(serviceState)}</b></span></div>
                 <div class="core-runtime-version"><small>当前版本</small><strong data-core-version="${esc(engine)}" title="${esc(installed ? runtime.version || "版本未知" : "尚未安装")}">${esc(installed ? conciseVersion(engine, runtime.version) : "尚未安装")}</strong></div>
-                <div class="core-runtime-actions">${runtimeActions ? `<div class="core-action-group" aria-label="${esc(engineName(engine))} 服务操作">${runtimeActions}</div>` : ""}<button class="button small ${installed ? "" : "primary"}" type="button" data-open-version-form>${installed ? "版本" : "安装"}</button></div>
+                <div class="core-runtime-actions">${runtimeActions ? `<div class="core-action-group" aria-label="${esc(engineName(engine))} 服务操作">${runtimeActions}</div>` : ""}<button class="button small ${installed ? "" : "primary"}" type="button" data-open-version-form ${existingPending || existingBlocked ? "disabled" : ""}>${existingBlocked ? "不可迁移" : existingPending ? "待迁移" : installed ? "版本" : "安装"}</button></div>
               </div>
-              <details class="core-version-panel version-drawer"><summary><b>${installed ? "版本管理" : `安装 ${esc(engineName(engine))}`}</b><span>收起</span></summary><div class="runtime-drawer-body"><form class="core-version-form" data-version-agent="${esc(agent.id)}" data-version-engine="${esc(engine)}"><fieldset class="release-channel-fieldset"><legend>版本来源</legend><div class="release-channel-options"><label><input type="radio" name="release_channel" value="stable" checked><span>最新稳定版</span></label><label><input type="radio" name="release_channel" value="development"><span>最新开发版</span></label><label><input type="radio" name="release_channel" value="custom"><span>指定版本</span></label></div></fieldset><label class="custom-version-field"><span>指定版本</span><input name="custom_version" maxlength="64" autocomplete="off" placeholder="例如 1.19.29"></label><button class="button small" type="submit" ${agent.status !== "online" || !can("operator") ? "disabled" : ""}>${installed ? "升级或切换版本" : "安装内核"}</button><small>${installed ? "官方 Release · SHA-256 校验" : "安装至 QAgent 专用目录，不影响系统已有内核"}</small></form></div></details>
+              <details class="core-version-panel version-drawer"><summary><b>${installed ? "版本管理" : `安装 ${esc(engineName(engine))}`}</b><span>收起</span></summary><div class="runtime-drawer-body"><form class="core-version-form" data-version-agent="${esc(agent.id)}" data-version-engine="${esc(engine)}"><fieldset class="release-channel-fieldset"><legend>版本来源</legend><div class="release-channel-options"><label><input type="radio" name="release_channel" value="stable" checked><span>最新稳定版</span></label><label><input type="radio" name="release_channel" value="development"><span>最新开发版</span></label><label><input type="radio" name="release_channel" value="custom"><span>指定版本</span></label></div></fieldset><label class="custom-version-field"><span>指定版本</span><input name="custom_version" maxlength="64" autocomplete="off" placeholder="例如 1.19.29"></label><button class="button small" type="submit" ${existingPending || existingBlocked || agent.status !== "online" || !can("operator") ? "disabled" : ""}>${existingBlocked ? "不可自动迁移" : existingPending ? "请先手动导入" : installed ? "升级或切换版本" : "安装内核"}</button><small>${existingBlocked ? esc(existingUnsupportedReason) : existingPending ? "先在手动配置页确认配置并迁移服务" : installed ? "官方 Release · SHA-256 校验" : "安装至 QAgent 专用目录，不影响系统已有内核"}</small></form></div></details>
             </article>`;
           }
-          return `<article class="service-card service-${esc(engine)}" data-core-installed="${installed ? 1 : 0}">
+          return `<article class="service-card service-${esc(engine)}" data-core-installed="${installed ? 1 : 0}" data-existing-pending="${existingPending ? 1 : 0}" data-existing-unsupported="${esc(existingUnsupportedReason)}">
             <div class="service-card-main ${presetMode ? "" : "operations-only"}">
-              <div class="service-overview"><header><span class="engine-badge ${esc(engine)}">${esc(engineName(engine))}</span><span class="engine-state ${serviceTone}"><i></i><b data-core-service="${esc(engine)}">${esc(serviceState)}</b></span></header><div class="service-version"><span class="service-version-label"><small>内核版本</small><button class="service-version-toggle" type="button" data-open-version-form aria-label="打开 ${esc(engineName(engine))} ${installed ? "版本切换" : "安装内核"}">${installed ? "切换版本" : "安装内核"}</button></span><strong data-core-version="${esc(engine)}" title="${esc(installed ? runtime.version || "版本未知" : "尚未安装")}">${esc(installed ? conciseVersion(engine, runtime.version) : "尚未安装")}</strong></div></div>
+              <div class="service-overview"><header><span class="engine-badge ${esc(engine)}">${esc(engineName(engine))}</span><span class="engine-state ${serviceTone}"><i></i><b data-core-service="${esc(engine)}">${esc(serviceState)}</b></span></header><div class="service-version"><span class="service-version-label"><small>内核版本</small><button class="service-version-toggle" type="button" data-open-version-form aria-label="打开 ${esc(engineName(engine))} ${installed ? "版本切换" : "安装内核"}" ${existingPending || existingBlocked ? "disabled" : ""}>${existingBlocked ? "不可迁移" : existingPending ? "待迁移" : installed ? "切换版本" : "安装内核"}</button></span><strong data-core-version="${esc(engine)}" title="${esc(installed ? runtime.version || "版本未知" : "尚未安装")}">${esc(installed ? conciseVersion(engine, runtime.version) : "尚未安装")}</strong></div></div>
               ${presetMode ? `<div class="service-deployment"><dl class="service-facts"><div><dt>已部署配置</dt><dd>${deployed?.config_version ? `v${deployed.config_version}` : "—"}</dd></div><div><dt>已保存配置</dt><dd>${saved?.version ? `v${saved.version}` : "—"}</dd></div></dl>${drift ? `<div class="deployment-drift"><span>${deployed ? "已保存版本尚未部署" : "已保存配置尚未部署"}</span><b>待部署 v${saved.version}</b></div>` : ""}${configDiff ? `<details class="config-diff-drawer"><summary>查看配置差异 <i>＋</i></summary>${configDiff}</details>` : ""}<div class="service-endpoint ${endpoint ? "" : "empty"}">${endpoint ? `<span><b>${esc(firstProfile?.protocol || "客户端入站")}</b><small>${esc(firstProfile?.profile?.format || "已部署配置")}</small></span><code>${esc(endpoint)}</code>` : `<b>${deployed ? "自定义配置" : saved ? "尚未部署" : "尚未配置"}</b>`}</div></div>` : ""}
               ${primaryActions ? `<div class="service-primary-action">${primaryActions}</div>` : ""}
             </div>
-            ${presetMode ? "" : `<details class="runtime-drawer version-drawer"><summary><span><b>${installed ? "版本切换" : "安装内核"}</b><small>${installed ? "升级或切换内核版本" : "从官方 Release 安装"}</small></span><i>＋</i></summary><div class="runtime-drawer-body"><form class="core-version-form" data-version-agent="${esc(agent.id)}" data-version-engine="${esc(engine)}"><fieldset class="release-channel-fieldset"><legend>版本来源</legend><div class="release-channel-options"><label><input type="radio" name="release_channel" value="stable" checked><span>最新稳定版</span></label><label><input type="radio" name="release_channel" value="development"><span>最新开发版</span></label><label><input type="radio" name="release_channel" value="custom"><span>指定版本</span></label></div></fieldset><label class="custom-version-field"><span>指定版本</span><input name="custom_version" maxlength="64" autocomplete="off" placeholder="例如 1.19.29"></label><button class="button small" type="submit" ${agent.status !== "online" || !can("operator") ? "disabled" : ""}>${installed ? "升级或切换版本" : "安装内核"}</button><small>${installed ? "官方 Release · SHA-256 校验" : "安装至 QAgent 专用目录，不影响系统已有内核"}</small></form></div></details>`}
+            ${presetMode ? "" : `<details class="runtime-drawer version-drawer"><summary><span><b>${installed ? "版本切换" : "安装内核"}</b><small>${existingBlocked ? "检测到的现有服务未被接管" : installed ? "升级或切换内核版本" : "从官方 Release 安装"}</small></span><i>＋</i></summary><div class="runtime-drawer-body"><form class="core-version-form" data-version-agent="${esc(agent.id)}" data-version-engine="${esc(engine)}"><fieldset class="release-channel-fieldset"><legend>版本来源</legend><div class="release-channel-options"><label><input type="radio" name="release_channel" value="stable" checked><span>最新稳定版</span></label><label><input type="radio" name="release_channel" value="development"><span>最新开发版</span></label><label><input type="radio" name="release_channel" value="custom"><span>指定版本</span></label></div></fieldset><label class="custom-version-field"><span>指定版本</span><input name="custom_version" maxlength="64" autocomplete="off" placeholder="例如 1.19.29"></label><button class="button small" type="submit" ${existingBlocked || agent.status !== "online" || !can("operator") ? "disabled" : ""}>${existingBlocked ? "不可自动迁移" : installed ? "升级或切换版本" : "安装内核"}</button><small>${existingBlocked ? esc(existingUnsupportedReason) : installed ? "官方 Release · SHA-256 校验" : "安装至 QAgent 专用目录，不影响系统已有内核"}</small></form></div></details>`}
             ${presetMode && access?.profiles?.length ? `<a class="service-client-access" href="#client-access" data-client-agent="${esc(agent.id)}" data-client-engine="${esc(engine)}"><span><b>客户端配置</b><small>${esc(access.source)} · ${esc(access.address)}</small></span><strong>${access.profiles.length} 个入站 <i>→</i></strong></a>` : ""}
           </article>`;
         })
@@ -722,6 +741,13 @@ function bindAgentPage(agentItems, presetMode = false) {
       });
     };
   });
+  document.querySelectorAll("[data-manual-import]").forEach((button) => {
+    button.onclick = () => {
+      state.data.liveAgent = button.dataset.manualAgent;
+      state.data.liveEngine = button.dataset.manualEngine;
+      location.hash = "#live-config";
+    };
+  });
   document.querySelectorAll(".core-version-form").forEach((form) => {
     form.onsubmit = async (event) => {
       event.preventDefault();
@@ -1055,8 +1081,28 @@ function updateAgentMetrics(item) {
   Object.entries(item.runtime || {}).forEach(([engine, runtime]) => {
     const card = root.querySelector(`.service-${CSS.escape(engine)}`);
     const installed = Boolean(runtime.installed);
+    const existingPending = Boolean(runtime.existing_config_available);
+    const existingUnsupportedReason = String(
+      runtime.existing_config_unsupported_reason || "",
+    );
     if (card && card.dataset.coreInstalled !== (installed ? "1" : "0")) {
       card.dataset.coreInstalled = installed ? "1" : "0";
+      refreshAgentPage();
+      return;
+    }
+    if (
+      card &&
+      card.dataset.existingPending !== (existingPending ? "1" : "0")
+    ) {
+      card.dataset.existingPending = existingPending ? "1" : "0";
+      refreshAgentPage();
+      return;
+    }
+    if (
+      card &&
+      card.dataset.existingUnsupported !== existingUnsupportedReason
+    ) {
+      card.dataset.existingUnsupported = existingUnsupportedReason;
       refreshAgentPage();
       return;
     }
@@ -1071,11 +1117,15 @@ function updateAgentMetrics(item) {
       `[data-core-service="${CSS.escape(engine)}"]`,
     );
     if (service) {
-      service.textContent = installed
+      service.textContent = existingPending
+        ? "现有服务待迁移"
+        : existingUnsupportedReason
+        ? "检测到但不可迁移"
+        : installed
         ? serviceStatusName(runtime.service_status)
         : "未安装";
       service.closest(".engine-state").className =
-        `engine-state ${installed ? statusTone(runtime.service_status) : "muted"}`;
+        `engine-state ${existingPending || existingUnsupportedReason ? "warn" : installed ? statusTone(runtime.service_status) : "muted"}`;
       service
         .closest(".service-card")
         ?.querySelectorAll("[data-service-action]")
@@ -1085,12 +1135,19 @@ function updateAgentMetrics(item) {
             online,
             installed,
             runtime.service_status,
-          );
+          ) || existingPending || Boolean(existingUnsupportedReason);
         });
     }
   });
   root.querySelectorAll(".core-version-form button[type=submit]").forEach(
-    (button) => (button.disabled = !online || !can("operator")),
+    (button) => {
+      const card = button.closest(".service-card");
+      button.disabled =
+        !online ||
+        !can("operator") ||
+        card?.dataset.existingPending === "1" ||
+        Boolean(card?.dataset.existingUnsupported);
+    },
   );
 }
 

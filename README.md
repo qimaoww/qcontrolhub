@@ -74,6 +74,8 @@ Linux 控制面主机可以运行 [`deploy/quick-start.sh`](deploy/quick-start.s
 
 控制面可用后，在 Web 控制台为目标节点生成添加命令，并在受控 Linux 节点执行该命令。安装流程会下载受凭据保护的 Agent 与配套资源，写入受限环境文件，安装 systemd 单元并启动 QAgent。
 
+一键安装器可以识别符合严格安全检查的标准 Xray 或 sing-box 单文件服务；现有配置不会在注册时自动导入或切换服务，管理员可在“手动配置”页查看节点快照并显式迁移到 QAgent 专用服务。迁移失败会恢复原服务，无法精确识别时则保留隔离式 QAgent 配置。支持边界见 [生产部署指南](docs/production.md#4-安装远程-agent)。
+
 Agent 以受限的 root 服务运行，远程任务会真实修改配置、服务、内核二进制或 QAgent 专用流量规则。接入前请核对证书、权限、内核路径和服务名；完整步骤见 [安装远程 Agent](docs/production.md#4-安装远程-agent)。
 
 ## 开发与验证
