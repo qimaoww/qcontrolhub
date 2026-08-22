@@ -233,6 +233,7 @@ func (updater *CoreUpdater) resolveRelease(ctx context.Context, engine core.Engi
 		}
 	case core.CoreVersionDevelopment:
 		found := false
+		var inspected []string
 		for page := 1; page <= 10 && !found; page++ {
 			var releases []githubRelease
 			endpoint := fmt.Sprintf("%s?per_page=5&page=%d", base, page)
@@ -240,17 +241,35 @@ func (updater *CoreUpdater) resolveRelease(ctx context.Context, engine core.Engi
 				return resolvedCoreRelease{}, fmt.Errorf("resolve latest development %s release: %w", engine, err)
 			}
 			for _, candidate := range releases {
-				if !candidate.Draft && candidate.Prerelease {
-					release = candidate
-					found = true
-					break
+				if candidate.Draft || !candidate.Prerelease {
+					continue
 				}
+				inspected = append(inspected, candidate.TagName)
+				if _, err := selectCoreReleaseAsset(engine, updater.goarch, candidate); err != nil {
+					var missing missingCoreReleaseAssetError
+					if errors.As(err, &missing) {
+						// A prerelease without a compatible binary (for example
+						// Mihomo's toolchain-only Alpha release) is not a usable
+						// development build; keep searching so a real prerelease
+						// is selected instead of failing on the first match.
+						continue
+					}
+					return resolvedCoreRelease{}, err
+				}
+				release = candidate
+				found = true
 			}
 			if len(releases) < 5 {
 				break
 			}
 		}
 		if !found {
+			if len(inspected) > 0 {
+				if engine == core.EngineMihomo {
+					return resolvedCoreRelease{}, fmt.Errorf("official %s development channel has no prerelease containing a supported Linux %s mihomo binary (inspected tags: %s; accepted asset names: mihomo-linux-%s-<version>.gz or mihomo-linux-%s-<variant>-<version>.gz)", engine, updater.goarch, strings.Join(inspected, ", "), updater.goarch, updater.goarch)
+				}
+				return resolvedCoreRelease{}, fmt.Errorf("official %s development channel has no prerelease containing a supported Linux %s binary (inspected tags: %s)", engine, updater.goarch, strings.Join(inspected, ", "))
+			}
 			return resolvedCoreRelease{}, errors.New("官方仓库当前没有可用的开发版 prerelease")
 		}
 	default:
@@ -287,22 +306,66 @@ func officialCoreRepository(engine core.Engine) (string, error) {
 	}
 }
 
+type missingCoreReleaseAssetError struct {
+	engine core.Engine
+	arch   string
+	asset  string
+}
+
+func (err missingCoreReleaseAssetError) Error() string {
+	if err.asset == "" {
+		return fmt.Sprintf("official %s release has no supported Linux %s asset", err.engine, err.arch)
+	}
+	return fmt.Sprintf("official %s release does not contain expected asset %s", err.engine, err.asset)
+}
+
+// matchMihomoLinuxAsset returns the single viable generic linux binary for the
+// requested mihomo architecture. found is false when the release carries no
+// usable platform binary (for example Mihomo's toolchain-only Alpha release).
+// A non-nil error is returned only for ambiguous or invalid releases and must
+// be treated as fail-closed.
+func matchMihomoLinuxAsset(arch string, release githubRelease) (githubReleaseAsset, bool, error) {
+	prefix := "mihomo-linux-" + arch + "-"
+	var matched githubReleaseAsset
+	for _, asset := range release.Assets {
+		if !strings.HasPrefix(asset.Name, prefix) || !strings.HasSuffix(asset.Name, ".gz") {
+			continue
+		}
+		variant := strings.TrimSuffix(strings.TrimPrefix(asset.Name, prefix), ".gz")
+		if strings.HasPrefix(variant, "v1-") || strings.HasPrefix(variant, "v2-") || strings.HasPrefix(variant, "v3-") {
+			continue
+		}
+		if strings.Contains(variant, "compatible") || strings.Contains(variant, "go1") {
+			continue
+		}
+		if err := validateReleaseAssetMetadata(asset); err != nil {
+			return githubReleaseAsset{}, false, err
+		}
+		if matched.Name != "" {
+			return githubReleaseAsset{}, false, errors.New("official Mihomo release contains multiple generic Linux assets")
+		}
+		matched = asset
+	}
+	if matched.Name == "" {
+		return githubReleaseAsset{}, false, nil
+	}
+	return matched, true, nil
+}
+
 func selectCoreReleaseAsset(engine core.Engine, arch string, release githubRelease) (githubReleaseAsset, error) {
+	if engine == core.EngineMihomo {
+		asset, found, err := matchMihomoLinuxAsset(arch, release)
+		if err != nil {
+			return githubReleaseAsset{}, err
+		}
+		if !found {
+			return githubReleaseAsset{}, missingCoreReleaseAssetError{engine: engine, arch: arch}
+		}
+		return asset, nil
+	}
+
 	wanted := ""
 	switch engine {
-	case core.EngineMihomo:
-		prefix := "mihomo-linux-" + arch + "-"
-		for _, asset := range release.Assets {
-			if strings.HasPrefix(asset.Name, prefix) && strings.HasSuffix(asset.Name, ".gz") {
-				variant := strings.TrimSuffix(strings.TrimPrefix(asset.Name, prefix), ".gz")
-				if !strings.Contains(variant, "compatible") && !strings.HasPrefix(variant, "v1-") && !strings.HasPrefix(variant, "v2-") && !strings.HasPrefix(variant, "v3-") && !strings.Contains(variant, "go12") {
-					if wanted != "" {
-						return githubReleaseAsset{}, errors.New("official Mihomo release contains multiple generic Linux assets")
-					}
-					wanted = asset.Name
-				}
-			}
-		}
 	case core.EngineXray:
 		switch arch {
 		case "amd64":
@@ -323,7 +386,7 @@ func selectCoreReleaseAsset(engine core.Engine, arch string, release githubRelea
 		}
 	}
 	if wanted == "" {
-		return githubReleaseAsset{}, fmt.Errorf("official %s release has no supported Linux %s asset", engine, arch)
+		return githubReleaseAsset{}, missingCoreReleaseAssetError{engine: engine, arch: arch}
 	}
 	for _, asset := range release.Assets {
 		if asset.Name == wanted {
@@ -333,7 +396,7 @@ func selectCoreReleaseAsset(engine core.Engine, arch string, release githubRelea
 			return asset, nil
 		}
 	}
-	return githubReleaseAsset{}, fmt.Errorf("official %s release does not contain expected asset %s", engine, wanted)
+	return githubReleaseAsset{}, missingCoreReleaseAssetError{engine: engine, arch: arch, asset: wanted}
 }
 
 func validateReleaseAssetMetadata(asset githubReleaseAsset) error {

@@ -319,3 +319,196 @@ func TestExtractCoreBinaryFormats(t *testing.T) {
 		})
 	}
 }
+
+// mihomoFixtureAsset returns a structurally valid GitHub release asset used only
+// as a fixed table fixture. Naming follows MetaCubeX/mihomo's Alpha build
+// workflow (.github/workflows/build.yml on the Alpha branch): the default
+// goamd64 build is emitted as "mihomo-linux-<arch>-<version>.gz" while CPU and
+// Go-toolchain variants use "<arch>-<variant>-<version>.gz".
+func mihomoFixtureAsset(name string) githubReleaseAsset {
+	return githubReleaseAsset{
+		Name:               name,
+		Size:               2 << 20,
+		Digest:             "sha256:" + strings.Repeat("0", 64),
+		BrowserDownloadURL: "https://github.com/MetaCubeX/mihomo/releases/download/test/" + name,
+	}
+}
+
+func TestSelectMihomoLinuxAssetMatchesRealNaming(t *testing.T) {
+	t.Parallel()
+	// Fixture metadata sources (all verified 2026-08-23):
+	//   - stable tag v1.19.30 from MetaCubeX/mihomo releases/tags/v1.19.30
+	//   - development tag Prerelease-Alpha (version.txt -> alpha-8e6738f) carried
+	//     only toolchain/vendor/version; the binary naming below is the exact
+	//     output convention defined by the Alpha branch build workflow.
+	tests := []struct {
+		name    string
+		arch    string
+		release githubRelease
+		want    string
+		wantErr string
+	}{
+		{
+			name: "stable amd64 picks default official asset",
+			arch: "amd64",
+			release: githubRelease{TagName: "v1.19.30", Assets: []githubReleaseAsset{
+				mihomoFixtureAsset("mihomo-linux-amd64-compatible-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1-go120-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1-go123-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v2-go120-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v2-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v3-go123-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v3-v1.19.30.gz"),
+			}},
+			want: "mihomo-linux-amd64-v1.19.30.gz",
+		},
+		{
+			name: "development amd64 picks default alpha asset",
+			arch: "amd64",
+			release: githubRelease{TagName: "Prerelease-Alpha", Prerelease: true, Assets: []githubReleaseAsset{
+				mihomoFixtureAsset("mihomo-linux-amd64-compatible-alpha-8e6738f.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1-alpha-8e6738f.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v2-alpha-8e6738f.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v3-alpha-8e6738f.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-alpha-8e6738f.gz"),
+			}},
+			want: "mihomo-linux-amd64-alpha-8e6738f.gz",
+		},
+		{
+			name: "stable arm64 picks default official asset",
+			arch: "arm64",
+			release: githubRelease{TagName: "v1.19.30", Assets: []githubReleaseAsset{
+				mihomoFixtureAsset("mihomo-linux-arm64-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-arm64-v1.19.30.deb"),
+			}},
+			want: "mihomo-linux-arm64-v1.19.30.gz",
+		},
+		{
+			name: "wrong platform and packaging excluded",
+			arch: "amd64",
+			release: githubRelease{TagName: "v1.19.30", Assets: []githubReleaseAsset{
+				mihomoFixtureAsset("mihomo-linux-386-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-386-softfloat-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-armv7-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-mips-softfloat-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-loong64-abi1-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-windows-amd64-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-darwin-amd64-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-android-amd64-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1.19.30.deb"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1.19.30.rpm"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1.19.30.pkg.tar.zst"),
+				mihomoFixtureAsset("mihomo-linux-amd64-compatible-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1-go123-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v1-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v2-v1.19.30.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-v3-v1.19.30.gz"),
+			}},
+			wantErr: "no supported Linux amd64 asset",
+		},
+		{
+			name: "multiple generic assets rejected as ambiguous",
+			arch: "amd64",
+			release: githubRelease{TagName: "v1.19.30", Assets: []githubReleaseAsset{
+				mihomoFixtureAsset("mihomo-linux-amd64-first.gz"),
+				mihomoFixtureAsset("mihomo-linux-amd64-second.gz"),
+			}},
+			wantErr: "multiple generic Linux assets",
+		},
+		{
+			name: "missing sha256 digest rejected fail closed",
+			arch: "amd64",
+			release: githubRelease{TagName: "v1.19.30", Assets: []githubReleaseAsset{
+				{Name: "mihomo-linux-amd64-v1.19.30.gz", Size: 2 << 20, Digest: "", BrowserDownloadURL: "https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-v1.19.30.gz"},
+			}},
+			wantErr: "missing a valid GitHub SHA-256 digest",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := selectCoreReleaseAsset(core.EngineMihomo, test.arch, test.release)
+			if test.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), test.wantErr) {
+					t.Fatalf("selectCoreReleaseAsset() error = %v, want contains %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || got.Name != test.want {
+				t.Fatalf("selectCoreReleaseAsset() = %q, %v; want %q", got.Name, err, test.want)
+			}
+		})
+	}
+}
+
+func TestResolveDevelopmentSkipsToolchainOnlyPrerelease(t *testing.T) {
+	t.Parallel()
+	digest := "sha256:" + strings.Repeat("b", 64)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.RequestURI() != "/repos/MetaCubeX/mihomo/releases?per_page=5&page=1" {
+			t.Fatalf("unexpected development request %s", request.URL.String())
+		}
+		// Prerelease-Alpha is the real MetaCubeX/mihomo Alpha branch artifact
+		// release: it carries only toolchain/vendor/version and no mihomo binary,
+		// so it must be skipped in favour of the next prerelease.
+		body := `[
+			{"tag_name":"Prerelease-Alpha","draft":false,"prerelease":true,"assets":[
+				{"name":"toolchain.tar.gz","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/toolchain.tar.gz","digest":"` + digest + `","size":67734784},
+				{"name":"vendor.tar.gz","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/vendor.tar.gz","digest":"` + digest + `","size":13867204},
+				{"name":"version.txt","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt","digest":"` + digest + `","size":14}
+			]},
+			{"tag_name":"Prerelease-Beta","draft":false,"prerelease":true,"assets":[
+				{"name":"mihomo-linux-amd64-alpha-8e6738f.gz","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Beta/mihomo-linux-amd64-alpha-8e6738f.gz","digest":"` + digest + `","size":2097152}
+			]}
+		]`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: request}, nil
+	})}
+	updater := &CoreUpdater{client: client, apiBase: githubAPIBase, goarch: "amd64", trustedURL: trustedCoreReleaseURL}
+	resolved, err := updater.resolveRelease(context.Background(), core.EngineMihomo, core.CoreVersionDevelopment)
+	if err != nil {
+		t.Fatalf("resolveRelease(development): %v", err)
+	}
+	if resolved.Tag != "Prerelease-Beta" || resolved.Asset.Name != "mihomo-linux-amd64-alpha-8e6738f.gz" {
+		t.Fatalf("resolveRelease(development) = %s/%s, want Prerelease-Beta/mihomo-linux-amd64-alpha-8e6738f.gz", resolved.Tag, resolved.Asset.Name)
+	}
+}
+
+func TestResolveDevelopmentFailsWithoutUsablePrerelease(t *testing.T) {
+	t.Parallel()
+	digest := "sha256:" + strings.Repeat("c", 64)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := `[{"tag_name":"Prerelease-Alpha","draft":false,"prerelease":true,"assets":[
+			{"name":"toolchain.tar.gz","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/toolchain.tar.gz","digest":"` + digest + `","size":67734784},
+			{"name":"vendor.tar.gz","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/vendor.tar.gz","digest":"` + digest + `","size":13867204},
+			{"name":"version.txt","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/Prerelease-Alpha/version.txt","digest":"` + digest + `","size":14}
+		]}]`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: request}, nil
+	})}
+	updater := &CoreUpdater{client: client, apiBase: githubAPIBase, goarch: "amd64", trustedURL: trustedCoreReleaseURL}
+	_, err := updater.resolveRelease(context.Background(), core.EngineMihomo, core.CoreVersionDevelopment)
+	if err == nil {
+		t.Fatal("resolveRelease(development) unexpectedly succeeded with no usable prerelease")
+	}
+	if !strings.Contains(err.Error(), "Prerelease-Alpha") || !strings.Contains(err.Error(), "mihomo-linux-amd64") || !strings.Contains(err.Error(), "Linux amd64") {
+		t.Fatalf("resolveRelease(development) error %q does not expose task/arch/naming diagnostics", err)
+	}
+}
+
+func TestResolveDevelopmentNoPrereleaseDoesNotFallBack(t *testing.T) {
+	t.Parallel()
+	digest := "sha256:" + strings.Repeat("d", 64)
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body := `[{"tag_name":"v1.19.30","draft":false,"prerelease":false,"assets":[
+			{"name":"mihomo-linux-amd64-v1.19.30.gz","browser_download_url":"https://github.com/MetaCubeX/mihomo/releases/download/v1.19.30/mihomo-linux-amd64-v1.19.30.gz","digest":"` + digest + `","size":2097152}
+		]}]`
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header), Request: request}, nil
+	})}
+	updater := &CoreUpdater{client: client, apiBase: githubAPIBase, goarch: "amd64", trustedURL: trustedCoreReleaseURL}
+	if _, err := updater.resolveRelease(context.Background(), core.EngineMihomo, core.CoreVersionDevelopment); err == nil {
+		t.Fatal("resolveRelease(development) fell back to stable when no prerelease exists")
+	} else if !strings.Contains(err.Error(), "开发版 prerelease") {
+		t.Fatalf("resolveRelease(development) error = %q, want no-prerelease message", err)
+	}
+}
