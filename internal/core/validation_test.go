@@ -36,7 +36,7 @@ func TestParseEngine(t *testing.T) {
 
 func TestActionWhitelistIncludesCurrentConfigurationRead(t *testing.T) {
 	t.Parallel()
-	for _, action := range []Action{ActionValidate, ActionDeploy, ActionStart, ActionStop, ActionRestart, ActionStatus, ActionInstall, ActionReadConfig} {
+	for _, action := range []Action{ActionValidate, ActionDeploy, ActionStart, ActionStop, ActionRestart, ActionStatus, ActionInstall, ActionReadConfig, ActionImportExisting} {
 		if !action.Valid() {
 			t.Errorf("action %q is not valid", action)
 		}

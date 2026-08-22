@@ -13,7 +13,8 @@ import (
 func TestDecodeJournalCoreLogMapsManagedUnitsAndPriorities(t *testing.T) {
 	t.Parallel()
 	value := []byte(`{"MESSAGE":"accepted connection","_SYSTEMD_UNIT":"qagent-sing-box.service","PRIORITY":"4","__REALTIME_TIMESTAMP":"1787310000123456"}`)
-	entry, ok := decodeJournalCoreLog(value)
+	units := map[string]core.Engine{"qagent-sing-box.service": core.EngineSingBox}
+	entry, _, ok := decodeJournalCoreLog(value, units)
 	if !ok {
 		t.Fatal("managed journal entry was rejected")
 	}
@@ -23,7 +24,7 @@ func TestDecodeJournalCoreLogMapsManagedUnitsAndPriorities(t *testing.T) {
 	if entry.LoggedAt.UnixMicro() != 1787310000123456 {
 		t.Fatalf("logged_at = %s", entry.LoggedAt)
 	}
-	if _, ok := decodeJournalCoreLog([]byte(`{"MESSAGE":"ignored","_SYSTEMD_UNIT":"ssh.service","PRIORITY":"6"}`)); ok {
+	if _, _, ok := decodeJournalCoreLog([]byte(`{"MESSAGE":"ignored","_SYSTEMD_UNIT":"ssh.service","PRIORITY":"6"}`), units); ok {
 		t.Fatal("unmanaged service journal was accepted")
 	}
 }
@@ -53,12 +54,72 @@ func TestDecodeJournalCoreLogBoundsMessages(t *testing.T) {
 	t.Parallel()
 	message := strings.Repeat("a", core.MaxCoreLogMessageBytes-1) + "日志"
 	value := []byte(`{"MESSAGE":"` + message + `","_SYSTEMD_UNIT":"qagent-xray.service","PRIORITY":"6"}`)
-	entry, ok := decodeJournalCoreLog(value)
+	units := map[string]core.Engine{"qagent-xray.service": core.EngineXray}
+	entry, _, ok := decodeJournalCoreLog(value, units)
 	if !ok || len([]byte(entry.Message)) > core.MaxCoreLogMessageBytes {
 		t.Fatalf("bounded entry = %d bytes, ok=%v", len([]byte(entry.Message)), ok)
 	}
-	nulEntry, ok := decodeJournalCoreLog([]byte(`{"MESSAGE":"before\u0000after","_SYSTEMD_UNIT":"qagent-xray.service","PRIORITY":"6"}`))
+	nulEntry, _, ok := decodeJournalCoreLog([]byte(`{"MESSAGE":"before\u0000after","_SYSTEMD_UNIT":"qagent-xray.service","PRIORITY":"6"}`), units)
 	if !ok || strings.ContainsRune(nulEntry.Message, '\x00') {
 		t.Fatalf("NUL-containing journal entry was not sanitized: %+v, ok=%v", nulEntry, ok)
 	}
+}
+
+func TestCoreLogSourcesMixManagedAndExactGenericUnits(t *testing.T) {
+	t.Parallel()
+	sources := coreLogJournalSources(map[core.Engine]EngineSpec{
+		core.EngineMihomo:  {Service: "qagent-mihomo.service"},
+		core.EngineXray:    {Service: "xray.service"},
+		core.EngineSingBox: {Service: "sing-box.service"},
+	})
+	if len(sources) != 2 {
+		t.Fatalf("source count = %d, want 2", len(sources))
+	}
+	managed, generic := sources[0], sources[1]
+	if !containsArgument(managed.arguments, "--namespace=qagent-cores") ||
+		!containsArgument(managed.arguments, "--unit=qagent-mihomo.service") {
+		t.Fatalf("managed journal arguments = %v", managed.arguments)
+	}
+	if containsArgument(generic.arguments, "--namespace=qagent-cores") ||
+		!containsArgument(generic.arguments, "--unit=xray.service") ||
+		!containsArgument(generic.arguments, "--unit=sing-box.service") {
+		t.Fatalf("generic journal arguments = %v", generic.arguments)
+	}
+	if engine, ok := coreLogEngineForUnit("xray.service", generic.unitEngines); !ok || engine != core.EngineXray {
+		t.Fatalf("generic Xray mapping = %q, %t", engine, ok)
+	}
+	if _, ok := coreLogEngineForUnit("ssh.service", generic.unitEngines); ok {
+		t.Fatal("unrelated default-namespace unit was accepted")
+	}
+}
+
+func TestCoreLogSourcesRejectArbitraryCustomUnitsAndDeduplicateCursors(t *testing.T) {
+	t.Parallel()
+	sources := coreLogJournalSources(map[core.Engine]EngineSpec{
+		core.EngineMihomo:          {Service: "qagent-xray.service"},
+		core.EngineXray:            {Service: "qagent-xray.service"},
+		core.EngineSingBox:         {Service: "singbox.service"},
+		core.EngineShadowsocksRust: {Service: "custom-ss.service"},
+	})
+	if len(sources) != 1 || containsArgument(sources[0].arguments, "--unit=qagent-xray.service") ||
+		containsArgument(sources[0].arguments, "--unit=custom-ss.service") {
+		t.Fatalf("custom source filtering = %+v", sources)
+	}
+	collector := NewCoreLogCollector(map[core.Engine]EngineSpec{})
+	entry := core.CoreLogEntry{Engine: core.EngineSingBox, Level: "info", Message: "once", LoggedAt: time.Now()}
+	collector.appendJournal(entry, "cursor-1")
+	collector.appendJournal(entry, "cursor-1")
+	batch := collector.NextBatch()
+	if batch == nil || len(batch.Entries) != 1 {
+		t.Fatalf("deduplicated batch = %+v", batch)
+	}
+}
+
+func containsArgument(arguments []string, expected string) bool {
+	for _, argument := range arguments {
+		if argument == expected {
+			return true
+		}
+	}
+	return false
 }

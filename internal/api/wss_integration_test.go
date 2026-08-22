@@ -359,9 +359,9 @@ func TestWSSAgentLifecycleWithPostgreSQL(t *testing.T) {
 	if err != nil || len(tasks) < 2 || tasks[0].Status != core.TaskSucceeded || tasks[0].CoreVersion != core.CoreVersionDevelopment {
 		t.Fatalf("completed task not persisted: tasks=%+v error=%v", tasks, err)
 	}
-	for _, action := range []core.Action{core.ActionDeploy, core.ActionReadConfig, core.ActionStart, core.ActionStop, core.ActionRestart} {
+	for _, action := range []core.Action{core.ActionDeploy, core.ActionImportExisting, core.ActionReadConfig, core.ActionStart, core.ActionStop, core.ActionRestart} {
 		request := core.TaskRequest{AgentID: enrolled.AgentID, Action: action, Engine: core.EngineMihomo}
-		if action == core.ActionDeploy {
+		if action == core.ActionDeploy || action == core.ActionImportExisting {
 			request.ConfigID = config.ID
 		}
 		created, createErr := dataStore.CreateTask(ctx, request)

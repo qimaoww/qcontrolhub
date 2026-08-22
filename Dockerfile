@@ -77,6 +77,7 @@ COPY frontend/modules /usr/share/nginx/html/assets/modules
 COPY frontend/app.css /usr/share/nginx/html/assets/app.css
 COPY deploy/remote/install-agent.sh /usr/share/nginx/html/install-agent.sh
 COPY deploy/bootstrap-core-services.sh /usr/share/nginx/html/install-assets/deploy/bootstrap-core-services.sh
+COPY deploy/existing-core-mapping.sh /usr/share/nginx/html/install-assets/deploy/existing-core-mapping.sh
 COPY deploy/systemd/qagent-core-journal.conf /usr/share/nginx/html/install-assets/deploy/systemd/qagent-core-journal.conf
 COPY deploy/systemd/qagent-mihomo.service /usr/share/nginx/html/install-assets/deploy/systemd/qagent-mihomo.service
 COPY deploy/systemd/qagent-xray.service /usr/share/nginx/html/install-assets/deploy/systemd/qagent-xray.service

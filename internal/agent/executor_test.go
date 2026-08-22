@@ -113,6 +113,32 @@ func TestCoreBootstrapDoesNotTouchLegacyInstallations(t *testing.T) {
 	}
 }
 
+func TestOneClickInstallerMapsOnlyValidatedExistingCorePaths(t *testing.T) {
+	t.Parallel()
+	contents, err := os.ReadFile("../../deploy/remote/install-agent.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mapping, err := os.ReadFile("../../deploy/existing-core-mapping.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := string(contents) + string(mapping)
+	for _, required := range []string{
+		"discover_existing_xray", "discover_existing_singbox", "systemctl is-active --quiet",
+		"existing-core-mapping.sh", "QCH_EXISTING_XRAY_CONFIG", "QCH_EXISTING_SING_BOX_CONFIG",
+	} {
+		if !strings.Contains(script, required) {
+			t.Errorf("one-click installer is missing inherited-core guard %q", required)
+		}
+	}
+	for _, forbidden := range []string{"systemctl stop xray.service", "systemctl stop sing-box.service", "QCH_INHERIT_CONFIGS", "validate-inherited"} {
+		if strings.Contains(script, forbidden) {
+			t.Errorf("one-click installer stops an existing service via %q", forbidden)
+		}
+	}
+}
+
 func TestPersistentCoreLogOutputsAreRejected(t *testing.T) {
 	t.Parallel()
 	fixtures := []struct {

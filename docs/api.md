@@ -176,7 +176,7 @@ Content-Type: application/json
 
 ### 列出任务
 
-任务列表筛选条件可组合使用。`agent_id` 接受完整 Agent ID；`status` 允许 `pending`、`running`、`succeeded`、`failed`、`canceled`；`action` 允许 `validate`、`deploy`、`read-config`、`start`、`stop`、`restart`、`status`、`install`。`limit` 默认为 100，最大为 500；无效的 `status` 或 `action` 返回 `400`。
+任务列表筛选条件可组合使用。`agent_id` 接受完整 Agent ID；`status` 允许 `pending`、`running`、`succeeded`、`failed`、`canceled`；`action` 允许 `validate`、`deploy`、`import-existing`、`read-config`、`start`、`stop`、`restart`、`status`、`install`。`limit` 默认为 100，最大为 500；无效的 `status` 或 `action` 返回 `400`。
 
 ### 创建任务
 
@@ -214,7 +214,7 @@ Content-Type: application/json
 }
 ```
 
-允许的 `action` 为 `validate`、`deploy`、`read-config`、`start`、`stop`、`restart`、`status`、`install`。Agent 必须在注册能力中声明对应内核。版本安装只使用四个内核各自的官方 GitHub Release，不接受 URL；`development` 没有官方 prerelease 时任务会失败而不会降级到稳定版。
+允许的 `action` 为 `validate`、`deploy`、`import-existing`、`read-config`、`start`、`stop`、`restart`、`status`、`install`。Agent 必须在注册能力中声明对应内核。`import-existing` 只接受该节点自己保存的配置快照，并且只在 Agent 已精确识别、仍等待管理员确认的现有 Xray 或 sing-box 服务上执行；常规使用应从“手动配置”页提交。版本安装只使用四个内核各自的官方 GitHub Release，不接受 URL；`development` 没有官方 prerelease 时任务会失败而不会降级到稳定版。
 
 任务成功响应表示目标节点已完成对应操作；失败响应会保留节点返回的错误信息。部署任务只有在目标节点真实写入配置并成功重启服务后，才会进入节点的最新部署记录。
 
@@ -242,7 +242,7 @@ Agent 协议端点如下：
 | `POST` | `/agent/v1/enroll` | 注册 Bearer 令牌 |
 | `GET` | `/agent/v1/connect` | Agent 签名的 WebSocket Upgrade |
 
-WSS 握手必须协商子协议 `qcontrolhub.agent.v1`。服务端先发送 `hello` 及该节点的端口流量策略；Agent 定期发送 `heartbeat`，心跳包含内核运行状态、主机资源以及端口配额的收发计数和封禁状态；服务端下发带随机 lease ID 的 `task`，Agent 返回包含 `success` 和结果正文的 `result`，服务端确认 `result_ack`。连接压缩关闭，服务端要求 50 秒内收到消息，官方 Agent 默认每 15 秒心跳并在断线后指数退避重连。
+WSS 握手必须协商子协议 `qcontrolhub.agent.v1`。服务端先发送 `hello` 及该节点的端口流量策略；Agent 定期发送 `heartbeat`，心跳包含内核运行状态、主机资源以及端口配额的收发计数和封禁状态；`runtime.<engine>.existing_config_available` 表示已有服务可在手动配置页读取并迁移，`existing_config_unsupported_reason` 表示检测到已有服务但精确 argv、路径、歧义或 wrapper 安全边界不允许自动读取/接管，控制面只展示该原因并禁用相关操作。服务端下发带随机 lease ID 的 `task`，Agent 返回包含 `success` 和结果正文的 `result`，服务端确认 `result_ack`。连接压缩关闭，服务端要求 50 秒内收到消息，官方 Agent 默认每 15 秒心跳并在断线后指数退避重连。
 
 ## Webhook 事件
 

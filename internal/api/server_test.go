@@ -38,30 +38,32 @@ func TestDecodeJSONAcceptsMaximumConfigAfterEscapingExpansion(t *testing.T) {
 	}
 }
 
-func TestProductionProxyAcceptsMaximumConfigEnvelope(t *testing.T) {
+func TestEveryProxyAcceptsMaximumConfigEnvelope(t *testing.T) {
 	t.Parallel()
-	contents, err := os.ReadFile("../../deploy/nginx/qcontrolhub.conf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	match := regexp.MustCompile(`(?m)^\s*client_max_body_size\s+(\d+)([kKmMgG]?)\s*;`).FindSubmatch(contents)
-	if len(match) != 3 {
-		t.Fatal("production Nginx configuration does not set client_max_body_size")
-	}
-	amount, err := strconv.ParseInt(string(match[1]), 10, 64)
-	if err != nil {
-		t.Fatal(err)
-	}
-	switch strings.ToLower(string(match[2])) {
-	case "k":
-		amount *= 1 << 10
-	case "m":
-		amount *= 1 << 20
-	case "g":
-		amount *= 1 << 30
-	}
-	if amount < core.MaxConfigEnvelopeBytes {
-		t.Fatalf("production Nginx body limit = %d bytes, smaller than maximum configuration envelope %d", amount, core.MaxConfigEnvelopeBytes)
+	for _, path := range []string{"../../frontend/nginx.conf", "../../deploy/nginx/qcontrolhub.conf"} {
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		match := regexp.MustCompile(`(?m)^\s*client_max_body_size\s+(\d+)([kKmMgG]?)\s*;`).FindSubmatch(contents)
+		if len(match) != 3 {
+			t.Fatalf("%s does not set client_max_body_size", path)
+		}
+		amount, err := strconv.ParseInt(string(match[1]), 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch strings.ToLower(string(match[2])) {
+		case "k":
+			amount *= 1 << 10
+		case "m":
+			amount *= 1 << 20
+		case "g":
+			amount *= 1 << 30
+		}
+		if amount < core.MaxConfigEnvelopeBytes {
+			t.Fatalf("%s body limit = %d bytes, smaller than maximum configuration envelope %d", path, amount, core.MaxConfigEnvelopeBytes)
+		}
 	}
 }
 

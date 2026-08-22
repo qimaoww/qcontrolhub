@@ -13,6 +13,7 @@ deploy/*
 !deploy/remote/
 !deploy/remote/install-agent.sh
 !deploy/bootstrap-core-services.sh
+!deploy/existing-core-mapping.sh
 !deploy/systemd/
 !deploy/systemd/*.service
 examples/*

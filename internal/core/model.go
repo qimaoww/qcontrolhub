@@ -139,20 +139,21 @@ func ParseEngine(value string) (Engine, error) {
 type Action string
 
 const (
-	ActionValidate     Action = "validate"
-	ActionDeploy       Action = "deploy"
-	ActionStart        Action = "start"
-	ActionStop         Action = "stop"
-	ActionRestart      Action = "restart"
-	ActionStatus       Action = "status"
-	ActionInstall      Action = "install"
-	ActionReadConfig   Action = "read-config"
-	ActionUpgradeAgent Action = "upgrade-agent"
+	ActionValidate       Action = "validate"
+	ActionDeploy         Action = "deploy"
+	ActionStart          Action = "start"
+	ActionStop           Action = "stop"
+	ActionRestart        Action = "restart"
+	ActionStatus         Action = "status"
+	ActionInstall        Action = "install"
+	ActionReadConfig     Action = "read-config"
+	ActionImportExisting Action = "import-existing"
+	ActionUpgradeAgent   Action = "upgrade-agent"
 )
 
 func (a Action) Valid() bool {
 	switch a {
-	case ActionValidate, ActionDeploy, ActionStart, ActionStop, ActionRestart, ActionStatus, ActionInstall, ActionReadConfig, ActionUpgradeAgent:
+	case ActionValidate, ActionDeploy, ActionStart, ActionStop, ActionRestart, ActionStatus, ActionInstall, ActionReadConfig, ActionImportExisting, ActionUpgradeAgent:
 		return true
 	default:
 		return false
@@ -160,9 +161,11 @@ func (a Action) Valid() bool {
 }
 
 type RuntimeState struct {
-	Installed     bool   `json:"installed"`
-	Version       string `json:"version,omitempty"`
-	ServiceStatus string `json:"service_status,omitempty"`
+	Installed                       bool   `json:"installed"`
+	Version                         string `json:"version,omitempty"`
+	ServiceStatus                   string `json:"service_status,omitempty"`
+	ExistingConfigAvailable         bool   `json:"existing_config_available,omitempty"`
+	ExistingConfigUnsupportedReason string `json:"existing_config_unsupported_reason,omitempty"`
 }
 
 type HostMetrics struct {

@@ -8,6 +8,9 @@ fi
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 repository_dir=$(CDPATH= cd -- "$script_dir/.." && pwd)
+mapping_library="$script_dir/existing-core-mapping.sh"
+[ -r "$mapping_library" ] || { printf '%s\n' "required mapping library is unavailable: $mapping_library" >&2; exit 1; }
+. "$mapping_library"
 
 for command_name in cmp getent grep groupadd id install systemctl useradd; do
   command -v "$command_name" >/dev/null 2>&1 || {
@@ -93,8 +96,17 @@ install_if_missing "$repository_dir/examples/configs/xray-minimal.json" /etc/qag
 install_if_missing "$repository_dir/examples/configs/sing-box-minimal.json" /etc/qagent/sing-box/config.json root "$service_group" 0640
 install_if_missing "$repository_dir/examples/configs/shadowsocks-rust-minimal.json" /etc/qagent/shadowsocks-rust/config.json root "$service_group" 0640
 
+enabled_services=""
 for engine in mihomo xray sing-box shadowsocks-rust; do
+  require_skipped_core_service_inactive "$engine"
   install_managed_unit "$script_dir/systemd/qagent-$engine.service" "/etc/systemd/system/qagent-$engine.service"
+  if skip_core_service "$engine"; then
+    require_skipped_core_service_inactive "$engine"
+    systemctl disable "qagent-$engine.service" >/dev/null 2>&1 || true
+    printf '%s\n' "kept existing $engine service; disabled qagent-$engine.service"
+  else
+    enabled_services="$enabled_services qagent-$engine.service"
+  fi
 done
 
 journal_config_dir=/etc/systemd/journald@qagent-cores.conf.d
@@ -111,5 +123,5 @@ fi
 install -o root -g root -m 0644 "$script_dir/systemd/qagent-core-journal.conf" "$journal_config"
 
 systemctl daemon-reload
-systemctl enable qagent-mihomo.service qagent-xray.service qagent-sing-box.service qagent-shadowsocks-rust.service >/dev/null
+[ -z "$enabled_services" ] || systemctl enable $enabled_services >/dev/null
 printf '%s\n' 'core services are bootstrapped; install each official binary from the QControlHub node page'

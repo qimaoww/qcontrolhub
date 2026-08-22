@@ -36,6 +36,18 @@ func TestTaskCancelRetryAndFiltersWithPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save initial agent config: %v", err)
 	}
+	globalConfig, err := dataStore.CreateConfig(ctx, core.Config{
+		Name: "migration ownership guard", Engine: core.EngineMihomo, Content: firstContent,
+	})
+	if err != nil {
+		t.Fatalf("save global configuration: %v", err)
+	}
+	defer dataStore.DeleteConfig(context.Background(), globalConfig.ID)
+	if _, err := dataStore.CreateTask(ctx, core.TaskRequest{
+		AgentID: agent.ID, Action: core.ActionImportExisting, Engine: core.EngineMihomo, ConfigID: globalConfig.ID,
+	}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "saved snapshot") {
+		t.Fatalf("create migration from global configuration error = %v, want node snapshot rejection", err)
+	}
 	existingConfigs, err := dataStore.ExistingConfigIDs(ctx, []string{config.ID, "cfg_missing"})
 	if err != nil || !existingConfigs[config.ID] || existingConfigs["cfg_missing"] {
 		t.Fatalf("existing task configuration IDs = %+v, %v", existingConfigs, err)

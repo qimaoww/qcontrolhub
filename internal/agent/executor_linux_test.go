@@ -169,6 +169,61 @@ func TestExecutorReadsAndValidatesCurrentConfigurationWithoutWriting(t *testing.
 	}
 }
 
+func TestReadCurrentConfigValidatesTheReturnedSnapshot(t *testing.T) {
+	root := t.TempDir()
+	configPath := filepath.Join(root, "config.json")
+	original := `{"inbounds":[],"outbounds":[],"tag":"original"}`
+	changed := `{"inbounds":[],"outbounds":[],"tag":"changed"}`
+	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "xray")
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s' %q > %q\ngrep -q '\"tag\":\"original\"' \"$4\"\n", changed, configPath)
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	executor := &Executor{Specs: map[core.Engine]EngineSpec{
+		core.EngineXray: {Binary: binary, ConfigPath: configPath, Service: "xray.service"},
+	}}
+
+	content, err := executor.ReadCurrentConfig(context.Background(), core.EngineXray)
+	if err != nil {
+		t.Fatalf("ReadCurrentConfig() error = %v", err)
+	}
+	if content != original {
+		t.Fatalf("returned snapshot = %q, want original %q", content, original)
+	}
+	if live, err := os.ReadFile(configPath); err != nil || string(live) != changed {
+		t.Fatalf("live file after concurrent change = %q, %v", live, err)
+	}
+}
+
+func TestManualReadAllowsViewingConfigThatManagedDeployWouldReject(t *testing.T) {
+	root := t.TempDir()
+	binary := filepath.Join(root, "xray")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(root, "config.json")
+	content := `{"log":{"access":"/var/log/xray/access.log"},"inbounds":[],"outbounds":[]}`
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	executor := &Executor{Specs: map[core.Engine]EngineSpec{
+		core.EngineXray: {Binary: binary, ConfigPath: configPath, Service: "xray.service"},
+	}}
+
+	read, err := executor.Execute(context.Background(), core.Task{Action: core.ActionReadConfig, Engine: core.EngineXray})
+	if err != nil || read != content {
+		t.Fatalf("manual read = %q, %v", read, err)
+	}
+	if _, err := executor.Execute(context.Background(), core.Task{
+		Action: core.ActionValidate, Engine: core.EngineXray, ConfigContent: read,
+	}); err == nil || !strings.Contains(err.Error(), "persistent") {
+		t.Fatalf("managed validation accepted persistent logs: %v", err)
+	}
+}
+
 func TestReadConfigurationFileRejectsUnsafeOrOversizedSources(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -199,6 +254,127 @@ func TestReadConfigurationFileRejectsUnsafeOrOversizedSources(t *testing.T) {
 	}
 	if _, err := readConfigurationFile(oversized); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversized configuration error = %v", err)
+	}
+}
+
+func TestExistingSingBoxSnapshotMergesExactConfigDirectory(t *testing.T) {
+	root := t.TempDir()
+	configDirectory := filepath.Join(root, "conf.d")
+	validationDirectory := filepath.Join(root, "managed")
+	if err := os.MkdirAll(configDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(validationDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	primary := filepath.Join(root, "config.json")
+	if err := os.WriteFile(primary, []byte(`{"log":{"level":"info"},"inbounds":[{"tag":"primary"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDirectory, "10-outbounds.json"), []byte(`{"outbounds":[{"tag":"direct","type":"direct"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDirectory, "20-log.json"), []byte(`{"log":{"level":"debug"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(root, "sing-box")
+	script := `#!/bin/sh
+set -eu
+[ "$1" = check ] && [ "$2" = -c ]
+if [ "$#" -eq 5 ]; then
+  [ "$4" = -C ] && [ -d "$5" ]
+fi
+grep -q '"inbounds"' "$3"
+`
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	existing := EngineSpec{Binary: binary, ConfigPath: primary, ConfigDirectory: configDirectory, Service: "sing-box.service"}
+	managed := EngineSpec{Binary: binary, ConfigPath: filepath.Join(validationDirectory, "config.json"), Service: "qagent-sing-box.service"}
+	executor := &Executor{Specs: map[core.Engine]EngineSpec{core.EngineSingBox: managed}, ExistingSpecs: map[core.Engine]EngineSpec{core.EngineSingBox: existing}}
+	content, err := executor.readExistingConfig(context.Background(), core.EngineSingBox, managed, existing)
+	if err != nil {
+		t.Fatalf("read merged sing-box snapshot: %v", err)
+	}
+	for _, required := range []string{`"tag": "primary"`, `"tag": "direct"`, `"level": "debug"`} {
+		if !strings.Contains(content, required) {
+			t.Errorf("merged snapshot is missing %s: %s", required, content)
+		}
+	}
+	if strings.Contains(content, `"level": "info"`) {
+		t.Fatalf("later path unexpectedly replaced the earlier sorted sing-box value: %s", content)
+	}
+
+	if err := os.Symlink(filepath.Join(configDirectory, "10-outbounds.json"), filepath.Join(configDirectory, "30-linked.json")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.readExistingConfig(context.Background(), core.EngineSingBox, managed, existing); err == nil || !strings.Contains(err.Error(), "non-symlink") {
+		t.Fatalf("symlinked config-directory entry error = %v", err)
+	}
+	if err := os.Remove(filepath.Join(configDirectory, "30-linked.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(configDirectory, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.readExistingConfig(context.Background(), core.EngineSingBox, managed, existing); err == nil || !strings.Contains(err.Error(), "writable by group") {
+		t.Fatalf("group-writable config-directory error = %v", err)
+	}
+	if err := os.Chmod(configDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	realDirectory := configDirectory + "-real"
+	if err := os.Rename(configDirectory, realDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realDirectory, configDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := executor.readExistingConfig(context.Background(), core.EngineSingBox, managed, existing); err == nil || !strings.Contains(err.Error(), "not a real directory") {
+		t.Fatalf("symlinked config-directory error = %v", err)
+	}
+}
+
+func TestExistingServiceExecutableAcceptsOnlyFixedForwarder(t *testing.T) {
+	requireAgentRoot(t)
+	root := t.TempDir()
+	forwarder := filepath.Join(root, "sing-box-forwarder")
+	serviceBinary := filepath.Join(root, "sing-box")
+	if err := os.WriteFile(forwarder, []byte("#!/bin/sh\nexec /usr/bin/true \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(forwarder, serviceBinary); err != nil {
+		t.Fatal(err)
+	}
+	spec := EngineSpec{Binary: "/usr/bin/true", ServiceBinary: serviceBinary}
+	if err := validateExistingServiceExecutable(spec); err != nil {
+		t.Fatalf("fixed exec forwarder rejected: %v", err)
+	}
+	secondLink := filepath.Join(root, "sing-box-second-link")
+	if err := os.Symlink(serviceBinary, secondLink); err != nil {
+		t.Fatal(err)
+	}
+	multiHop := spec
+	multiHop.ServiceBinary = secondLink
+	if err := validateExistingServiceExecutable(multiHop); err == nil || !strings.Contains(err.Error(), "at most one symlink") {
+		t.Fatalf("multi-hop service executable error = %v", err)
+	}
+	if err := os.WriteFile(forwarder, []byte("#!/bin/sh\necho unsafe\nexec /usr/bin/true \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateExistingServiceExecutable(spec); err == nil || !strings.Contains(err.Error(), "fixed exec forwarder") {
+		t.Fatalf("arbitrary wrapper error = %v", err)
+	}
+	realScript := filepath.Join(root, "not-a-core")
+	if err := os.WriteFile(realScript, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(forwarder, []byte("#!/bin/sh\nexec "+realScript+" \"$@\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	spec.Binary = realScript
+	if err := validateExistingServiceExecutable(spec); err == nil || !strings.Contains(err.Error(), "must not be a script") {
+		t.Fatalf("script target error = %v", err)
 	}
 }
 

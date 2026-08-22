@@ -43,6 +43,8 @@ jobs:
         run: go vet ./...
       - name: go test (unit + PostgreSQL integration)
         run: go test ./...
+      - name: Build web image release target
+        run: make web-image-test VERSION="${{ github.sha }}"
 
   images:
     name: build and publish GHCR images

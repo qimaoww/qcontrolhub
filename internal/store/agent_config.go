@@ -126,7 +126,7 @@ func (s *Store) LatestDeployments(ctx context.Context) ([]core.Deployment, error
 	rows, err := s.pool.Query(ctx, `
 		SELECT DISTINCT ON (agent_id,engine) agent_id,engine,COALESCE(config_id,''),COALESCE(config_version,0),finished_at
 		FROM tasks
-		WHERE action='deploy' AND status='succeeded' AND finished_at IS NOT NULL
+		WHERE action IN ('deploy','import-existing') AND status='succeeded' AND finished_at IS NOT NULL
 		ORDER BY agent_id,engine,finished_at DESC`)
 	if err != nil {
 		return nil, err

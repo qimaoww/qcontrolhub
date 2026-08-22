@@ -492,7 +492,11 @@ async function liveConfig() {
   const agents = state.data.agents || (await api("/agents"));
   state.data.agents = agents;
   const eligibleAgents = agents.filter((item) =>
-    (item.capabilities || []).some((engine) => item.runtime?.[engine]?.installed),
+    (item.capabilities || []).some(
+      (engine) =>
+        item.runtime?.[engine]?.installed ||
+        item.runtime?.[engine]?.existing_config_unsupported_reason,
+    ),
   );
   if (
     !state.data.liveAgent ||
@@ -514,7 +518,9 @@ async function liveConfig() {
     return;
   }
   const installedEngines = (agent.capabilities || []).filter(
-    (item) => agent.runtime?.[item]?.installed,
+    (item) =>
+      agent.runtime?.[item]?.installed ||
+      agent.runtime?.[item]?.existing_config_unsupported_reason,
   );
   if (
     !state.data.liveEngine ||
@@ -530,7 +536,11 @@ async function liveConfig() {
   const sourceKey = `${agent.id}|${engine}`;
   state.data.liveSources ||= {};
   const source = state.data.liveSources[sourceKey] || null;
-  const current = source?.content
+  const runtime = agent.runtime?.[engine] || {};
+  const unsupportedReason = String(
+    runtime.existing_config_unsupported_reason || "",
+  );
+  const current = !unsupportedReason && source?.content
     ? {
         ...(saved || {
           name: `${agent.name} · ${engineName(engine)}`,
@@ -541,9 +551,14 @@ async function liveConfig() {
       }
     : null;
   const language = engine === "mihomo" ? "YAML" : "JSON";
-  const runtime = agent.runtime?.[engine] || {};
+  const existingAvailable = Boolean(runtime.existing_config_available);
+  const liveActions = unsupportedReason || !can("operator")
+    ? ""
+    : existingAvailable
+      ? '<button class="button primary" type="submit" data-live-intent="import">手动导入并迁移</button>'
+      : '<button class="button" type="submit" data-live-intent="validate">保存并校验</button><button class="button primary" type="submit" data-live-intent="deploy">保存并部署</button>';
   shell(
-    `<article class="live-config-workspace"><header class="editor-toolbar"><h2>${esc(agent.name)} · ${esc(engineName(engine))}</h2><div class="editor-toolbar-state"><span class="engine-badge ${esc(engine)}">${esc(engineName(engine))}</span><b>${saved?.version ? `v${saved.version}` : "未保存"}</b></div></header>${current ? `<form class="live-config-editor" id="live-config-form" data-profile-editor data-new-config="0" data-engine="${esc(engine)}"><section class="code-workspace" data-code-editor data-code-language="${language}" data-code-max-bytes="2097152"><header class="code-editor-toolbar"><div class="code-file-meta"><span class="code-file-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20.5H7zM14 3.5v4h4M10 12h5M10 16h3"/></svg></span><b>${engine === "mihomo" ? "config.yaml" : "config.json"}</b></div><div class="code-editor-meta"><span class="code-language">${language}</span><span data-code-status aria-live="polite">已读取</span><span data-code-bytes>—</span><span data-code-position>行 1，列 1</span></div></header><div class="code-editor-frame"><aside class="code-gutter" aria-hidden="true" data-line-numbers>1</aside><textarea class="code-editor-input" name="content" data-code-input aria-label="${esc(engineName(engine))} 节点配置源码" spellcheck="false" required ${can("operator") ? "" : "readonly"}>${esc(current.content)}</textarea></div><footer><span><i class="code-status-dot" data-code-status-dot></i><span data-code-validation aria-live="polite"></span></span><div><button class="button code-reset" type="button" data-code-reset disabled>恢复原文</button>${can("operator") ? '<button class="button" type="submit" data-live-intent="validate">校验修改</button><button class="button primary" type="submit" data-live-intent="deploy">保存并部署</button>' : ""}</div></footer></section><aside class="live-config-inspector"><dl><div><dt>节点</dt><dd>${esc(agent.name)}</dd></div><div><dt>系统</dt><dd>${esc(agent.os)} / ${esc(agent.arch)}</dd></div><div><dt>内核</dt><dd>${esc(conciseVersion(engine, runtime.version))}</dd></div><div><dt>来源</dt><dd>节点文件</dd></div></dl></aside><input type="hidden" name="name" value="${esc(current.name)}"><input type="hidden" name="description" value="${esc(current.description)}"><input type="hidden" name="version" value="${current.version}"></form>` : agent.status !== "online" ? '<section class="node-config-source"><h2>节点离线</h2><span class="status-label warn">无法读取</span></section>' : source?.error ? `<section class="node-config-source"><h2>读取配置失败</h2><span class="status-label bad">${esc(source.error)}</span><button class="button" type="button" data-read-current>重新读取</button></section>` : '<section class="node-config-source" role="status" aria-live="polite"><h2>正在读取配置</h2><span class="status-label warn">读取中</span><form data-auto-read-current hidden></form></section>'}</article>`,
+    `<article class="live-config-workspace"><header class="editor-toolbar"><h2>${esc(agent.name)} · ${esc(engineName(engine))}</h2><div class="editor-toolbar-state"><span class="engine-badge ${esc(engine)}">${esc(engineName(engine))}</span><b>${unsupportedReason ? "不可自动迁移" : saved?.version ? `v${saved.version}` : existingAvailable ? "待导入" : "未保存"}</b></div></header>${current ? `<form class="live-config-editor" id="live-config-form" data-profile-editor data-new-config="0" data-engine="${esc(engine)}"><section class="code-workspace" data-code-editor data-code-language="${language}" data-code-max-bytes="2097152"><header class="code-editor-toolbar"><div class="code-file-meta"><span class="code-file-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 3.5h7l4 4V20.5H7zM14 3.5v4h4M10 12h5M10 16h3"/></svg></span><b>${engine === "mihomo" ? "config.yaml" : "config.json"}</b></div><div class="code-editor-meta"><span class="code-language">${language}</span><span data-code-status aria-live="polite">节点快照</span><span data-code-bytes>—</span><span data-code-position>行 1，列 1</span></div></header><div class="code-editor-frame"><aside class="code-gutter" aria-hidden="true" data-line-numbers>1</aside><textarea class="code-editor-input" name="content" data-code-input aria-label="${esc(engineName(engine))} 节点配置源码" spellcheck="false" required ${can("operator") ? "" : "readonly"}>${esc(current.content)}</textarea></div><footer><span><i class="code-status-dot" data-code-status-dot></i><span data-code-validation aria-live="polite"></span></span><div><button class="button code-reset" type="button" data-code-reset disabled>恢复原文</button>${liveActions}</div></footer></section><aside class="live-config-inspector"><dl><div><dt>节点</dt><dd>${esc(agent.name)}</dd></div><div><dt>系统</dt><dd>${esc(agent.os)} / ${esc(agent.arch)}</dd></div><div><dt>内核</dt><dd>${esc(conciseVersion(engine, runtime.version))}</dd></div><div><dt>来源</dt><dd>${existingAvailable ? "待迁移的现有服务快照" : "QAgent 管理配置快照"}</dd></div></dl></aside><input type="hidden" name="name" value="${esc(current.name)}"><input type="hidden" name="description" value="${esc(current.description)}"><input type="hidden" name="version" value="${current.version}"></form>` : agent.status !== "online" ? '<section class="node-config-source"><h2>节点离线</h2><span class="status-label warn">无法读取</span></section>' : unsupportedReason ? `<section class="node-config-source" role="status"><h2>检测到现有服务，但不可自动迁移</h2><span class="status-label bad">${esc(unsupportedReason)}</span><p>QAgent 未执行或接管该服务。请按提示调整为受支持的精确布局并重启 Agent 重新发现。</p></section>` : source?.error ? `<section class="node-config-source"><h2>读取配置失败</h2><span class="status-label bad">${esc(source.error)}</span><button class="button" type="button" data-read-current>重新读取</button></section>` : '<section class="node-config-source" role="status" aria-live="polite"><h2>正在读取配置</h2><span class="status-label warn">读取中</span><form data-auto-read-current hidden></form></section>'}</article>`,
     "手动配置",
   );
   state.data.liveEngines = installedEngines;
@@ -579,6 +594,14 @@ async function liveConfig() {
       const intent = event.submitter?.dataset.liveIntent || "validate";
       try {
         if (
+          intent === "import" &&
+          !(await confirmAction(
+            "确定导入当前快照并迁移服务？Agent 将停止并禁用原服务，启动 QAgent 专用服务；迁移任一步失败都会自动恢复原服务。",
+            "手动导入并迁移",
+          ))
+        )
+          return;
+        if (
           intent === "deploy" &&
           !(await confirmAction(
             "确定保存当前源码、写入节点固定配置并重启服务？",
@@ -607,13 +630,26 @@ async function liveConfig() {
             action: "deploy",
             config_id: saved.id,
           });
-        else
+        else if (intent === "validate")
           await submitTask({
             agent_id: agent.id,
             engine,
             action: "validate",
             config_id: saved.id,
           });
+        else {
+          const task = await api("/tasks", {
+            method: "POST",
+            body: JSON.stringify({
+              agent_id: agent.id,
+              engine,
+              action: "import-existing",
+              config_id: saved.id,
+            }),
+          });
+          if (!task?.id) throw new Error("迁移任务未创建");
+          notify("配置已保存，服务迁移任务已提交");
+        }
         state.data.liveSources[sourceKey] = {
           ...source,
           content: form.get("content"),
@@ -623,7 +659,12 @@ async function liveConfig() {
         notify(error.message, "error");
       }
     });
-  if (!current && agent.status === "online" && !source?.error)
+  if (
+    !current &&
+    !unsupportedReason &&
+    agent.status === "online" &&
+    !source?.error
+  )
     void readCurrentConfig(agent, engine, sourceKey);
 }
 
